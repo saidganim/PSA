@@ -66,7 +66,7 @@ private:
 
                     uint32_t data = rand();
                     // Port_MemData.write(data);
-                    wait();
+                    wait(Port_CLK.default_event());
                     // Port_MemData.write("ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ");
                 }
                 else
@@ -86,7 +86,7 @@ private:
                 cout << "CPU #" <<id<<":" << sc_time_stamp() << ": CPU executes NOP" << endl;
             }
             // Advance one cycle in simulated time
-            wait();
+            wait(Port_CLK.default_event());
         }
 
         // Finished the Tracefile, now stop the simulation

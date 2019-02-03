@@ -65,7 +65,7 @@ private:
             {
                 Port_Data.write( (addr < MEM_SIZE) ? m_data[addr] : 0 );
                 Port_Done.write( RET_READ_DONE );
-                wait();
+                wait(Port_CLK.default_event());
                 Port_Data.write("ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ");
             }
             else

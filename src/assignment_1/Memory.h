@@ -14,7 +14,9 @@ public:
     FUNC_NOTHING,
     FUNC_READ,
     FUNC_WRITE,
+    FUNC_INVALIDATE,
     FUNC_RESPONSE,
+    FUNC_REQUESTED,
 };
 
     enum RetCode
@@ -49,7 +51,7 @@ private:
             requests.push(bus->get_next_request());
             cout << sc_time_stamp() << ": MEMORY snooping PUT REQ into queue " << requests.size() << endl;
 
-            wait(Port_CLK.default_event());
+            // wait(Port_CLK.default_event());
         }
     }
     void execute(){

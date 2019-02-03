@@ -11,7 +11,7 @@
  *                            University of Amsterdam
  *
  */
-
+#define SC_INCLUDE_DYNAMIC_PROCESSES
 #include <systemc>
 #include <iostream>
 #include <string.h>
