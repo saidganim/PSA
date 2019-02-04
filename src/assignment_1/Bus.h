@@ -31,7 +31,7 @@ class Bus_if : public virtual sc_interface
     virtual bool write(int, int) = 0;
     virtual int wait_for_response(int, int) = 0;
     virtual struct request wait_for_any(int) = 0;
-    virtual bool cache_to_cache(int, int, int, int) = 0;
+    virtual bool cache_to_cache(int, int, int, int*) = 0;
     virtual bool cacheline_invalidate(int, int) = 0;
     // virtual void acquire_bus_lock() = 0;
     // virtual void release_bus_lock() = 0;
@@ -110,7 +110,7 @@ class Bus : public Bus_if, public sc_module
         wait(Port_CLK.value_changed_event());
         while(Port_BusAddr.read().to_int() != addr ||
         Port_ProcID.read().to_int() != proc_id || 
-        Port_BusFunc.read().to_int() != FUNC_RESPONSE){
+        (Port_BusFunc.read().to_int() != FUNC_RESPONSE && Port_BusFunc.read().to_int() != FUNC_REQUESTED)){
             // cout << "CPU #" <<proc_id<<":" << sc_time_stamp() << ": Cache of CPU <" << proc_id << "> got response but not own <" << Port_ProcID.read().to_int() << ">" <<endl;
             wait(Port_CLK.value_changed_event());
         }
@@ -135,7 +135,7 @@ class Bus : public Bus_if, public sc_module
     virtual struct request wait_for_any(int proc_id){
         struct request res;
       label1:
-        cout << "CPU #" <<proc_id<<":" << sc_time_stamp() << ": Snooping Cache of CPU <" << proc_id << "> waits for requests on bus" << endl;
+        // cout << "CPU #" <<proc_id<<":" << sc_time_stamp() << ": Snooping Cache of CPU <" << proc_id << "> waits for requests on bus" << endl;
         wait(Port_BusFunc.value_changed_event());
         // if it's own request or it's not writing request - then skip it
         if((Port_BusFunc.read().to_int() != FUNC_INVALIDATE && 
@@ -175,7 +175,7 @@ class Bus : public Bus_if, public sc_module
         Port_SourceID.write(DRAM_IDENTIFIER);
         // cout << "CPU #" <<proc_id<<":" << sc_time_stamp() << ": MEMORY MAIN SENDS result of <" << proc_id << "> to the bus" << endl;
         wait(Port_CLK.default_event());
-        cout << "CPU #" <<proc_id<<":" << sc_time_stamp() << ": MEMORY MAIN SENT result of <" << proc_id << "> to the bus" << endl;
+        // cout << "CPU #" <<proc_id<<":" << sc_time_stamp() << ": MEMORY MAIN SENT result of <" << proc_id << "> to the bus" << endl;
 
         Port_BusAddr.write("ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ");
         Port_ProcID.write("ZZZZZZZZ");
@@ -189,15 +189,24 @@ class Bus : public Bus_if, public sc_module
         wait(Port_BusFunc.default_event());
     }
 
-    virtual bool cache_to_cache(int proc_id, int source_id, int addr, int clstate){
+    virtual bool cache_to_cache(int proc_id, int source_id, int addr, int* clstate){
         c2c_intended = true;
         cout << "CPU #" <<proc_id<<":" << sc_time_stamp() << ": CACHE TO CACHE <" << source_id << "> to the "<< proc_id << endl;
         while(bus_mutex.try_lock() == false){ wait(Port_CLK.default_event());};
-        cout << "CPU #" <<proc_id<<":" << sc_time_stamp() << ": CACHE TO CACHE <" << source_id << "> to the IS LOCKED"<< proc_id << endl;        
+        // cout << "CPU #" <<proc_id<<":" << sc_time_stamp() << ": CACHE TO CACHE <" << source_id << "> to the IS LOCKED"<< proc_id << endl;        
         Port_BusAddr.write(addr);
-        Port_BusFunc.write(clstate == CACHEL_REQUESTED? FUNC_REQUESTED : FUNC_RESPONSE);
+        Port_BusFunc.write(*clstate == CACHEL_REQUESTED? FUNC_REQUESTED : FUNC_RESPONSE);
         Port_ProcID.write(proc_id);
         Port_SourceID.write(source_id); // this field identifies that response is not sent by the DRAM controller
+        
+        switch(*clstate){
+            case CACHEL_MODIFIED:
+                *clstate = CACHEL_OWNED;
+                break;
+            case CACHEL_EXCLUSIVE:
+                *clstate = CACHEL_SHARED;
+        }
+        
         wait(Port_CLK.default_event());
         Port_BusAddr.write("ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ");
         Port_ProcID.write("ZZZZZZZZ");
@@ -205,7 +214,7 @@ class Bus : public Bus_if, public sc_module
         Port_BusFunc.write("ZZZZ");
         bus_mutex.unlock();
         c2c_intended = false;
-        cout << "CPU #" <<proc_id<<":" << sc_time_stamp() << ": CACHE TO CACHE <" << source_id << "> to the "<< proc_id << " IS FINISHED " << endl;
+        // cout << "CPU #" <<proc_id<<":" << sc_time_stamp() << ": CACHE TO CACHE <" << source_id << "> to the "<< proc_id << " IS FINISHED " << endl;
         return true;
     }
 

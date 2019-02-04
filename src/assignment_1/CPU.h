@@ -64,7 +64,6 @@ private:
                 {
                     cout << "CPU #" <<id<<":" << sc_time_stamp() << ": CPU sends write" << endl;
 
-                    uint32_t data = rand();
                     // Port_MemData.write(data);
                     wait(Port_CLK.default_event());
                     // Port_MemData.write("ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ");

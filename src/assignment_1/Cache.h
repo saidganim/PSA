@@ -14,7 +14,7 @@ class SingleCache : public sc_module {
     public:    
     struct cache_record_t{
         int counter;    // need to implement LRU logic
-        int state:4;    // MOESI, but lets keep 4 bits for this field
+        int state;    // MOESI, but lets keep 4 bits for this field
         int tag: 24;    // we assumte that we have 32bit system, so we have 4KB pages.
                         // Since cacheline size is 32-bytes- we need only 5[0-4] bits for inner offset,
                         // we could use bits [11-5] to encode index, since we need only 3 bits,
@@ -22,7 +22,7 @@ class SingleCache : public sc_module {
                         // (those bits will be the same for virtual and physical addresses)
                         // the rest will go for the tag.
         int data[8];    // no comments...
-    }__attribute__((packed));
+    };
     int id;
 
     // From CPU
@@ -58,34 +58,6 @@ private:
         return (((addr & CACHEINDEX_MASK) >> CACHEINDEX_SHIFT) * CACHE_SET_SIZE) % CACHE_SIZE;
     }
 
-    void cache_to_cache(int cachelid, int proc_id, int addr){
-        // this function has to send cacheline in cache-to-cache fashion
-        // -- it could happen that cacheline was invalidated while current function tries to acqure the bus
-        // -- this communication has higher priority than DRAM responses, because of SHARED state is mandatory
-        // -- we could let only one thread send response to not overload the bus(using try_lock),
-        //     but in this case we could face the inconsistent state between caches. So we need to send
-        //     responses from every thread which has the copy of the cacheline. // TODO optimize this ...
-
-        wait(Port_CLK.negedge_event()); // this is needed because of cacheline could be invalidated by a snooping thread.
-        while(!bus->cache_to_cache(proc_id, id, addr, cachelines[cachelid].state)){
-            if(cachelines[cachelid].state != CACHEL_EXCLUSIVE && cachelines[cachelid].state != CACHEL_SHARED &&
-            cachelines[cachelid].state != CACHEL_OWNED) return; // cacheline is not valid anymore. It's time to RIP :)
-
-            // OPTIMIZATION ...
-            // SPACE FOR THE SNOOPING OF EVENTS AND TERMINATING THE THREAD IF SOME OTHER CORE SENT RESPONSE
-            wait(Port_CLK.negedge_event());
-        }
-
-        // now we sent it to the bus, so we can modify own state
-        switch(cachelines[cachelid].state){
-            case CACHEL_MODIFIED:
-                cachelines[cachelid].state = CACHEL_OWNED;
-                break;
-            case CACHEL_EXCLUSIVE:
-                cachelines[cachelid].state = CACHEL_SHARED;
-        }
-    }
-
     void snooping(){
         // this thread actually performs snooping on interconnection bus and invalids cacheline if write was sent
         while(true){
@@ -107,8 +79,10 @@ private:
                         cout << "CPU #" <<id<<":" << sc_time_stamp() << ": CACHE received invalidated for " << req.addr << endl;
                         cachelines[rindex].state = CACHEL_INVALID; // INVALID
                 } else if(req.func == Memory::FUNC_READ){
+                    if(cachelines[rindex].state == CACHEL_REQUESTED)
+                        cachelines[rindex].state = CACHEL_SHARED;
                     // we have to send response to the requestor ...    
-                    sc_spawn(sc_bind(&Bus::cache_to_cache, dynamic_cast<Bus*>(bus.get_interface()), req.id, id, req.addr, (int)cachelines[rindex].state)); //  this thread has to be issued in parallel
+                    sc_spawn(sc_bind(&Bus::cache_to_cache, dynamic_cast<Bus*>(bus.get_interface()), req.id, id, req.addr, &cachelines[rindex].state)); //  this thread has to be issued in parallel
                 }
             }
         }
@@ -124,7 +98,6 @@ private:
 
             Memory::Function f = Port_Func.read();
             int addr   = Port_Addr.read();
-            int data   = 0;
             if (f == Memory::FUNC_WRITE)
             {
                 cout << "CPU #" <<id<<":" << sc_time_stamp() << ": CACHE received write" << endl;
@@ -249,7 +222,8 @@ private:
                 clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &time2);
                 unsigned int result = (time2.tv_sec - time1.tv_sec) * 1e6 + (time2.tv_nsec - time1.tv_nsec) / 1e3;
                 _time_for_bus_acquisition.fetch_add(result, std::memory_order_relaxed);
-                cachelines[min_id].state = bus->wait_for_response(id, addr & ~0b11111);
+                // if somebody requested this cacheline, then shared. Not exclusive.
+                cachelines[min_id].state = cachelines[min_id].state == CACHEL_REQUESTED? bus->wait_for_response(id, addr & ~0b11111) : cachelines[min_id].state;
                 cout << "CPU #" <<id<<":" << sc_time_stamp() << ": CACHE reads cacheline" << endl;
                 cachelines[min_id].tag = (addr & CACHETAG_MASK) >> CACHETAG_SHIFT;
                 cachelines[min_id].counter = MAX_COUNTER;
@@ -257,30 +231,21 @@ private:
                 if (f == Memory::FUNC_WRITE)
                 {
                     // invalidating the cacheline and changing the status to modified
-                    while(!bus->cacheline_invalidate(addr, id)){
-                        wait(Port_CLK.default_event()); // wait for a one cycle
-                        wait(Port_CLK.negedge_event()); // need to wait half of the cycle to let cacheline be invalidated.
-                        if(cachelines[min_id].state == CACHEL_INVALID) {
-                        // this is the most ugly piece of code in my solution
-                        // but there is no way to avoid it, sorry :)
-                            wait(Port_CLK.default_event());
-                            goto _post_writeback;
-                        }
-                    };
-
+                    if(cachelines[min_id].state == CACHEL_SHARED)
+                        while(!bus->cacheline_invalidate(addr, id)){
+                            wait(Port_CLK.default_event()); // wait for a one cycle
+                            wait(Port_CLK.negedge_event()); // need to wait half of the cycle to let cacheline be invalidated.
+                            if(cachelines[min_id].state == CACHEL_INVALID) {
+                            // this is the most ugly piece of code in my solution
+                            // but there is no way to avoid it, sorry :)
+                                wait(Port_CLK.default_event());
+                                goto _post_writeback;
+                            }
+                        };
 
                     stats_writemiss(id);
                     // cachelines[min_id].data[addr & 0b11111] = Port_Data.read().to_int();
                     cachelines[min_id].state = CACHEL_MODIFIED;
-                    // for(int ii = 0; ii < 20; ++ii)sched_yield();
-                    // _main_memory_access_rate.fetch_add(1, std::memory_order_relaxed);
-                    // clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &time1);
-                    // while(!bus->write(id, addr | ~0b11111))wait(Port_CLK.default_event()), wait(Port_CLK.default_event()); // WRITE THROUGH
-                    // clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &time2);
-                    // unsigned int result = (time2.tv_sec - time1.tv_sec) * 1e6 + (time2.tv_nsec - time1.tv_nsec) / 1e3;
-                    // _time_for_bus_acquisition.fetch_add(result, std::memory_order_relaxed);
-                    // bus->wait_for_response(id);
-
                     cout << "CPU #" <<id<<":" << sc_time_stamp() << ": CACHE performs write-through" << endl;                   
                     Port_Done.write(Memory::RET_WRITE_DONE);
                     wait(Port_CLK.default_event());

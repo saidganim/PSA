@@ -74,7 +74,6 @@ private:
 
 
             Function f = (Memory::Function)req.func;
-            int addr   = req.addr;
             if (f == FUNC_READ)
             {
                 cout << sc_time_stamp() << ": MEM received read" << endl;

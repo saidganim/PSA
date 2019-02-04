@@ -1,0 +1,11 @@
+In current paper we discuss solution for the last assignment of "Parallel Systems Architecture" course. The task is to implement MOESI cache coherency protocol.
+Protocol is described in slides and in the book, so we don't look into description and corectness of the protocol in this report. On the other hand, we discuss implementations details and corner cases. 
+
+In current protocol every cacheline can be in one of the 5 following states:
+- Modified
+- Owned
+- Exclusive
+- Shared
+- Invalid
+
+transitions can happen between some of states on some events. We implement write-back cache which implements exactly all transitions as they are described in the paper. However, paper doesnt tell anything about Shared->Modified transition with write-back policy. We implemented separate operation(INVALIDATE) which transer cacheline first to MODIFIED/EXCLUSIVE state, and only then peform local modification. In some cases we synchronize cores on negative edge to let first snooping thread invalidate cacheline( if invalidation has to be done). We implement cache-to-cache communication to reduce number of cycles of bringing to cache operation(READ operation). Communication between caches happens via the same bus and the same wires, which are being used for regular memory operations. We perform cache-to-cache operation in 2 cycles(the first cycle - other cache gets the value, the second - it sends the value). Cache-to-cache messages has to have the highest priority, to not be lost.  We added special SourceID wire, specifically for this cache-to-cache communications. THis wires lets know to the cache "who" is the source of data( other cache or DRAM). Based on source , cache can make state shared(other cache) or exclusive( dram ). Here is one corner case presented - what if two cores are requesting the same cacheline from the DRAM? We have to keep in mind that one request will occure before the other. So the core, "whos" request is approved first can send cache-to-cache message to the second core, that it also requested the cacheline, but it's not delivered yet. Both of the cores will wait for the response from DRAM, but both of them will know that cacheline state is shared now.
